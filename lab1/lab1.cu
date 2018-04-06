@@ -148,33 +148,64 @@ __global__ void init_source(float *u, float *v, float *d)
 	int dx = x - W / 2, dy = -(y - H / 2);
 	int distance = dx * dx + dy * dy;
 
-	if (distance <= 10000) {
-		u[idx] = 5.0 * -dy;
-		v[idx] = 5.0 * dx;
+	if (distance <= 4900) {
+		u[idx] = 5.0 * (dy - dx);
+		v[idx] = 5.0 * (-dx - dy);
 	}
 
 	dx = x - W / 2 - 100, dy = -(y - H / 2) - 100;
 	distance = dx * dx + dy * dy;
-	if (distance <= 900) {
+	if (distance <= 400) {
 		d[idx] = 10.0;
 	}
 
 	dx = x - W / 2 + 100, dy = -(y - H / 2) - 100;
 	distance = dx * dx + dy * dy;
-	if (distance <= 900) {
+	if (distance <= 400) {
 		d[idx] = 10.0;
 	}
 
 	dx = x - W / 2 - 100, dy = -(y - H / 2) + 100;
 	distance = dx * dx + dy * dy;
-	if (distance <= 900) {
+	if (distance <= 400) {
 		d[idx] = 10.0;
 	}
 
 	dx = x - W / 2 + 100, dy = -(y - H / 2) + 100;
 	distance = dx * dx + dy * dy;
-	if (distance <= 900) {
+	if (distance <= 400) {
 		d[idx] = 10.0;
+	}
+}
+
+__global__ void compute_curl(const float *u, const float *v, float *curl)
+{
+	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+	const int x = idx % W, y = idx / W;
+
+	if (not_boundary(x, y)) {
+		curl[idx] = fabsf(0.5 * (v[idx + 1] - v[idx - 1] - u[x + (y + 1) * W] + u[x + (y - 1) * W]));
+	}
+}
+
+__global__ void vc_update(float *u0, float *v0, const float *curl, const float *u, const float *v)
+{
+	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+	const int x = idx % W, y = idx / W;
+
+	if (not_boundary(x, y)) {
+		float dw_dx = (curl[idx + 1] - curl[idx - 1]) * 0.5;
+		float dw_dy = (curl[x + (y + 1) * W] - curl[x + (y - 1) * W]) * 0.5;
+
+		float len = sqrtf(dw_dx * dw_dx + dw_dy * dw_dy) + 1e-6;
+
+		dw_dx /= len, dw_dy /= len;
+
+		float c = (u[x + (y + 1) * W] - u[x + (y - 1) * W]) * 0.5 -
+					(v[idx + 1] - v[idx - 1]) * 0.5;
+
+		u0[idx] = dw_dy * -c;
+		v0[idx] = dw_dx * c;
 	}
 }
 
@@ -205,6 +236,12 @@ __host__ void advect(float *d, const float *d0, const float *u, const float *v, 
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (d, mode);
 }
 
+__host__ void vorticity_confine(float *u0, float *v0, float *curl, const float *u, const float *v)
+{
+	compute_curl <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, curl);
+	vc_update <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u0, v0, curl, u, v);
+}
+
 struct Lab1VideoGenerator::Impl {
 	int t = 0;
 	float *u, *v, *p;
@@ -213,6 +250,7 @@ struct Lab1VideoGenerator::Impl {
 	float *u_source, *v_source;
 
 	float *div;
+	float *curl;
 
 	float *d, *d0, *dtemp;
 	float *d_source;
@@ -234,6 +272,7 @@ Lab1VideoGenerator::Lab1VideoGenerator(): impl(new Impl) {
 	cudaMalloc(&(impl->d_source), SIZE * sizeof(float));
 
 	cudaMalloc(&(impl->div), SIZE * sizeof(float));
+	cudaMalloc(&(impl->curl), SIZE * sizeof(float));
 
 	cudaMemset(impl->u0, 0, SIZE * sizeof(float));
 	cudaMemset(impl->v0, 0, SIZE * sizeof(float));
@@ -253,6 +292,7 @@ Lab1VideoGenerator::~Lab1VideoGenerator() {
 	cudaFree(impl->d), cudaFree(impl->d0), cudaFree(impl->d_source);
 
 	cudaFree(impl->div);
+	cudaFree(impl->curl);
 }
 
 void Lab1VideoGenerator::get_info(Lab1VideoInfo &info) 
@@ -267,22 +307,35 @@ void Lab1VideoGenerator::get_info(Lab1VideoInfo &info)
 
 void Lab1VideoGenerator::Generate(uint8_t *yuv) 
 {
-	// velocity step
+	/* velocity step */
 	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, impl->u_source);
-	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, impl->u_source);
+	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, impl->v_source);
 
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, Boundary::U);
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, Boundary::V);
 
+	// vorticity confinement
+	vorticity_confine(impl->u0, impl->v0, impl->curl, impl->u, impl->v);
+	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, impl->u_source);
+	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, impl->v_source);
+
+	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, Boundary::U);
+	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, Boundary::V);
+
+	// transport
 	advect(impl->u, impl->u0, impl->u0, impl->v0, 1.0, Boundary::U);
 	advect(impl->v, impl->v0, impl->u0, impl->v0, 1.0, Boundary::V);
 
 	project(impl->u, impl->v, impl->p, impl->p0, impl->ptemp, impl->div);
 
-	// scalar step
+	/* end velocity step */
+
+	/* scalar step */
 	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->d0, impl->d_source);
 
 	advect(impl->d, impl->d0, impl->u, impl->v, 0.995, Boundary::D);
+
+	/* end scalar step */
 
 	// copy to frame
 	float *m = new float[SIZE];
