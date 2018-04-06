@@ -4,6 +4,7 @@
 #include "lab1.h"
 
 #define dt 0.5f
+#define SWAP(a, b) {float *temp=a;a=b;b=temp;}
 
 static const unsigned W = 512;
 static const unsigned H = 512;
@@ -148,34 +149,22 @@ __global__ void init_source(float *u, float *v, float *d)
 	int dx = x - W / 2, dy = -(y - H / 2);
 	int distance = dx * dx + dy * dy;
 
-	if (distance <= 4900) {
-		u[idx] = 5.0 * (dy - dx);
-		v[idx] = 5.0 * (-dx - dy);
-	}
+	// if (distance <= 2500) {
+	// 	u[idx] = 50.0 * (dy - dx);
+	// 	v[idx] = 50.0 * (dx + dy);
+	// }
 
-	dx = x - W / 2 - 100, dy = -(y - H / 2) - 100;
-	distance = dx * dx + dy * dy;
-	if (distance <= 400) {
-		d[idx] = 10.0;
-	}
+	u[idx] = 5000.0;
 
-	dx = x - W / 2 + 100, dy = -(y - H / 2) - 100;
+	dx = x - W / 2 + 100, dy = -(y - H / 2);
 	distance = dx * dx + dy * dy;
-	if (distance <= 400) {
-		d[idx] = 10.0;
-	}
 
-	dx = x - W / 2 - 100, dy = -(y - H / 2) + 100;
-	distance = dx * dx + dy * dy;
-	if (distance <= 400) {
-		d[idx] = 10.0;
-	}
+	if (distance <= 900)  d[idx] = 5.0;
 
-	dx = x - W / 2 + 100, dy = -(y - H / 2) + 100;
+	dx = x - W / 2 - 100, dy = -(y - H / 2);
 	distance = dx * dx + dy * dy;
-	if (distance <= 400) {
-		d[idx] = 10.0;
-	}
+
+	if (distance <= 900)  d[idx] = 5.0;
 }
 
 __global__ void compute_curl(const float *u, const float *v, float *curl)
@@ -220,7 +209,7 @@ __host__ void project(float *u, float *v, float *p, float *p0, float *ptemp, flo
 	for (int i = 0; i < 50; i++) {
 		linear_solve <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, div, p0, p);
 
-		ptemp = p0; p0 = p; p = ptemp;
+		SWAP(p, p0);
 		
 		set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (p, Boundary::D);
 	}
@@ -246,13 +235,13 @@ struct Lab1VideoGenerator::Impl {
 	int t = 0;
 	float *u, *v, *p;
 	float *u0, *v0, *p0;
-	float *utemp, *vtemp, *ptemp;
+	float *ptemp;
 	float *u_source, *v_source;
 
 	float *div;
 	float *curl;
 
-	float *d, *d0, *dtemp;
+	float *d, *d0;
 	float *d_source;
 };
 
@@ -315,7 +304,7 @@ void Lab1VideoGenerator::Generate(uint8_t *yuv)
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, Boundary::V);
 
 	// vorticity confinement
-	vorticity_confine(impl->u0, impl->v0, impl->curl, impl->u, impl->v);
+	vorticity_confine(impl->u_source, impl->v_source, impl->curl, impl->u, impl->v);
 	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, impl->u_source);
 	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, impl->v_source);
 
@@ -359,9 +348,9 @@ void Lab1VideoGenerator::Generate(uint8_t *yuv)
 	delete [] m;
 	delete [] n;
 
-	impl->utemp = impl->u0; impl->u0 = impl->u; impl->u = impl->utemp;
-	impl->vtemp = impl->v0; impl->v0 = impl->v; impl->v = impl->vtemp;
-	impl->ptemp = impl->p0; impl->p0 = impl->p; impl->p = impl->ptemp;
+	SWAP(impl->u, impl->u0);
+	SWAP(impl->v, impl->v0);
+	SWAP(impl->d, impl->d0);
 
 	++(impl->t);
 }
