@@ -2,12 +2,14 @@
 #include <cstdint>
 #include <algorithm>
 #include "lab1.h"
+#include "utility.hpp"
 
 #define dt 0.05f
 #define RGB2Y(r, g, b) ( +0.299 * (r) + 0.587 * (g) + 0.114 * (b) )
 #define RGB2U(r, g, b) ( -0.169 * (r) - 0.331 * (g) + 0.500 * (b) + 128.0 )
 #define RGB2V(r, g, b) ( +0.500 * (r) - 0.419 * (g) - 0.081 * (b) + 128.0 )
 
+static const std::string BACKGROUND_FILE_NAME = "./aladdin_lamp.bmp";
 static const unsigned W = 512;
 static const unsigned H = 512;
 static const unsigned NFRAME = 240;
@@ -53,9 +55,11 @@ __global__ void density_to_yuv(const float *d, uint8_t *yuv)
 	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
 	const int x = idx % W, y = idx / W;
 
-	const float r = 0.0f,
-				g = 0.0f,
-				b = clamp(d[idx], 0.0f, 255.0f);
+	const float r = clamp(255.0f - d[idx], 0.0f, 255.0f),
+				g = 250.0f,
+				b = 255.0f;
+
+	if (fabsf(d[idx]) <= 1e-6) return;
 
 	yuv[idx] = static_cast<uint8_t>(RGB2Y(r, g, b));
 
@@ -64,6 +68,26 @@ __global__ void density_to_yuv(const float *d, uint8_t *yuv)
 		const int sidx = sx + sy * W / 2;
 		yuv[SIZE + sidx] = static_cast<uint8_t>(RGB2U(r, g, b));
 		yuv[SIZE + SIZE / 4 + sidx] = static_cast<uint8_t>(RGB2V(r, g, b));
+	}
+}
+
+template <typename T>
+__global__ void rgb_to_yuv(const T *rgb, uint8_t *yuv)
+{
+	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+	const int x = idx % W, y = idx / W;
+
+	const T r = rgb[3 * idx + 0],
+			g = rgb[3 * idx + 1],
+			b = rgb[3 * idx + 2];
+
+	yuv[idx] = static_cast<uint8_t>(RGB2Y(r, g, b));
+
+	if (x % 2 == 1 && y % 2 == 1) {
+		const int sx = x / 2, sy = y / 2;
+		const int sidx = sx + sy * W / 2;
+		yuv[SIZE + sidx] = static_cast<uint8_t>(128);
+		yuv[SIZE + SIZE / 4 + sidx] = static_cast<uint8_t>(128);
 	}
 }
 
@@ -291,6 +315,8 @@ struct Lab1VideoGenerator::Impl {
 
 	float *d, *d0;
 	float *d_source;
+
+	uint8_t *background_img;
 };
 
 Lab1VideoGenerator::Lab1VideoGenerator(): impl(new Impl) {
@@ -313,6 +339,12 @@ Lab1VideoGenerator::Lab1VideoGenerator(): impl(new Impl) {
 
 	cudaMalloc(&(impl->u_temp), SIZE * sizeof(float));
 	cudaMalloc(&(impl->v_temp), SIZE * sizeof(float));
+
+	cudaMalloc(&(impl->background_img), SIZE * 3 * sizeof(uint8_t));
+
+	std::vector <uint8_t> img_vec;
+	BMP::read_bmp(BACKGROUND_FILE_NAME, img_vec);
+	cudaMemcpy(impl->background_img, img_vec.data(), SIZE * 3 * sizeof(uint8_t), cudaMemcpyHostToDevice);
 
 	cudaMemset(impl->u0, 0, SIZE * sizeof(float));
 	cudaMemset(impl->v0, 0, SIZE * sizeof(float));
@@ -394,6 +426,11 @@ void Lab1VideoGenerator::Generate(uint8_t *yuv)
 	cudaMemcpy(impl->d0, impl->d, SIZE * sizeof(float), cudaMemcpyDeviceToDevice);
 
 	// copy to frame
+	cudaMemset(yuv, 255, SIZE);
+	cudaMemset(yuv + SIZE, 128, SIZE / 2);
+
+	rgb_to_yuv <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->background_img, yuv);
+
 	density_to_yuv <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->d, yuv);
 
 	++(impl->t);
