@@ -4,7 +4,9 @@
 #include "lab1.h"
 
 #define dt 0.5f
-#define SWAP(a, b) {float *temp=a;a=b;b=temp;}
+#define RGB2Y(r, g, b) ( +0.299 * (r) + 0.587 * (g) + 0.114 * (b) )
+#define RGB2U(r, g, b) ( -0.169 * (r) - 0.331 * (g) + 0.500 * (b) + 128.0 )
+#define RGB2V(r, g, b) ( +0.500 * (r) - 0.419 * (g) - 0.081 * (b) + 128.0 )
 
 static const unsigned W = 512;
 static const unsigned H = 512;
@@ -43,6 +45,25 @@ __device__ inline float bilinear_interpolate(float x, float y, const float *s)
 
 	return dx0 * (dy1 * s[px0 + W * py0] + dy1 * s[px0 + W * py1]) +
 			dx1 * (dy0 * s[px1 + W * py0] + dy1 * s[px1 + W * py1]);
+}
+
+__global__ void density_to_yuv(const float *d, uint8_t *yuv)
+{
+	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+	const int x = idx % W, y = idx / W;
+
+	const float r = 0.0f,
+				g = 0.0f,
+				b = clamp(d[idx], 0.0f, 255.0f);
+
+	yuv[idx] = static_cast<uint8_t>(RGB2Y(r, g, b));
+
+	if (x % 2 == 1 && y % 2 == 1) {
+		const int sx = x / 2, sy = y / 2;
+		const int sidx = sx + sy * W / 2;
+		yuv[SIZE + sidx] = static_cast<uint8_t>(RGB2U(r, g, b));
+		yuv[SIZE + SIZE / 4 + sidx] = static_cast<uint8_t>(RGB2V(r, g, b));
+	}
 }
 
 __global__ void add_force(float *d, const float *s)
@@ -202,17 +223,17 @@ __global__ void vc_update(float *u0, float *v0, const float *curl, const float *
 __host__ void project(float *u, float *v, float *p, float *p0, float *div)
 {
 	get_divergence <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, div);
-	cudaMemset(p, 0, SIZE * sizeof(float));
-
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (div, Boundary::D);
-	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (p, Boundary::D);
+
+	cudaMemset(p, 0, SIZE * sizeof(float));
+	cudaMemset(p0, 0, SIZE * sizeof(float));
 
 	for (int i = 0; i < NUMBER_OF_ITERATIONS; i++) {
 		linear_solve <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, div, p0, p);
 		
-		SWAP(p, p0);
+		// set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (p, Boundary::D);
 
-		set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (p, Boundary::D);
+		cudaMemcpy(p0, p, SIZE * sizeof(float), cudaMemcpyDeviceToDevice);
 	}
 
 	update_velocity <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, p);
@@ -334,31 +355,14 @@ void Lab1VideoGenerator::Generate(uint8_t *yuv)
 
 	/* end scalar step */
 
+	cudaDeviceSynchronize();
+
 	cudaMemcpy(impl->u0, impl->u, SIZE * sizeof(float), cudaMemcpyDeviceToDevice);
 	cudaMemcpy(impl->v0, impl->v, SIZE * sizeof(float), cudaMemcpyDeviceToDevice);
 	cudaMemcpy(impl->d0, impl->d, SIZE * sizeof(float), cudaMemcpyDeviceToDevice);
 
 	// copy to frame
-	float *m = new float[SIZE];
-	uint8_t *n = new uint8_t[SIZE];
-
-	cudaMemcpy(m, impl->d, SIZE * sizeof(float), cudaMemcpyDeviceToHost);
-
-	for (int i = 0; i < H; i++) {
-		for (int j = 0; j < W; j++) {
-			int idx = i * W + j;
-			if (i == 0 || j == 0 || i == H - 1 || j == W - 1) n[idx] = (uint8_t) std::max(std::min((float)m[idx], 255.0f), 0.0f);
-			else {
-				n[idx] = (uint8_t) std::max(std::min((float) (m[idx] + m[idx + 1] + m[idx - 1] + m[j + (i - 1) * W] + m[j + (i + 1) * W]) * 0.20f, 255.0f), 0.0f);
-			}
-		}
-	}
-
-	cudaMemcpy(yuv, n, SIZE * sizeof(uint8_t), cudaMemcpyHostToDevice);
-	cudaMemset(yuv + SIZE, 128, SIZE / 2 * sizeof(uint8_t));
-
-	delete [] m;
-	delete [] n;
+	density_to_yuv <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->d, yuv);
 
 	++(impl->t);
 }
