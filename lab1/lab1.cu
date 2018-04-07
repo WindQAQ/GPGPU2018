@@ -15,6 +15,7 @@ static const int SIZE = W *H;
 static const int THREADS_PER_BLOCK = 256;
 static const int NUMBER_OF_BLOCKS = SIZE / THREADS_PER_BLOCK;
 static const int NUMBER_OF_ITERATIONS = 50;
+static const float DIFFUSION = 0.00001f;
 
 enum class Boundary {
 	U, 
@@ -110,7 +111,7 @@ __global__ void get_divergence(const float *u, const float *v, float *div)
 	}
 }
 
-__global__ void linear_solve(const float *div, const float *p0, float *p)
+__global__ void linear_solve_project(const float *div, const float *p0, float *p)
 {
 	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
 	const int x = idx % W, y = idx / W;
@@ -118,6 +119,16 @@ __global__ void linear_solve(const float *div, const float *p0, float *p)
 	if (not_boundary(x, y)) {
 		p[idx] = (p0[idx - 1] + p0[idx + 1] + p0[x + (y - 1) * W] + 
 					p0[x + (y + 1) * W] + div[idx]) * 0.25;
+	}
+}
+
+__global__ void linear_solve_diffuse(const float *d0, float *d, const float diffusion)
+{
+	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+	const int x = idx % W, y = idx / W;
+
+	if (not_boundary(x, y)) {
+		d[idx] = (d0[idx] + diffusion * (d0[idx - 1] + d0[idx + 1] + d0[x + (y - 1) * W] + d0[x + (y - 1) * W])) / (4.0f * diffusion + 1.0f);
 	}
 }
 
@@ -171,12 +182,12 @@ __global__ void init_source(float *u, float *v, float *d)
 	int dx = x - W / 2, dy = -(y - H / 2);
 	int distance = dx * dx + dy * dy;
 
-	// if (distance <= 2500) {
-	// 	u[idx] = 10.0 * (dy - dx);
-	// 	v[idx] = 10.0 * (dx + dy);
-	// }
+	if (distance <= 2500) {
+		u[idx] = 10.0 * (dy - dx);
+		v[idx] = 10.0 * (-dx - dy);
+	}
 
-	u[idx] = 50.0;
+	// u[idx] = 50.0;
 
 	dx = x - W / 2 + 100, dy = -(y - H / 2);
 	distance = dx * dx + dy * dy;
@@ -229,7 +240,7 @@ __host__ void project(float *u, float *v, float *p, float *p0, float *div)
 	cudaMemset(p0, 0, SIZE * sizeof(float));
 
 	for (int i = 0; i < NUMBER_OF_ITERATIONS; i++) {
-		linear_solve <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (div, p0, p);
+		linear_solve_project <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (div, p0, p);
 		
 		set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (p, Boundary::D);
 
@@ -239,6 +250,19 @@ __host__ void project(float *u, float *v, float *p, float *p0, float *div)
 	update_velocity <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, p);
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, Boundary::U); 
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (v, Boundary::V);
+}
+
+__host__ void diffuse(float *d0, float *d, const float diffusion, Boundary mode)
+{
+	cudaMemset(d, 0, SIZE * sizeof(float));
+
+	for (int i = 0; i < NUMBER_OF_ITERATIONS; i++) {
+		linear_solve_diffuse <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (d0, d, diffusion);
+
+		set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (d, mode);
+
+		cudaMemcpy(d0, d, SIZE * sizeof(float), cudaMemcpyDeviceToDevice);
+	}
 }
 
 __host__ void advect(float *d, const float *d0, const float *u, const float *v, const float dissipation, Boundary mode)
@@ -338,6 +362,10 @@ void Lab1VideoGenerator::Generate(uint8_t *yuv)
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, Boundary::U);
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, Boundary::V);
 
+	// diffuse
+	diffuse(impl->u0, impl->u, DIFFUSION, Boundary::U);
+	diffuse(impl->v0, impl->v, DIFFUSION, Boundary::V);
+
 	project(impl->u0, impl->v0, impl->p, impl->p0, impl->div);
 
 	// transport
@@ -351,6 +379,10 @@ void Lab1VideoGenerator::Generate(uint8_t *yuv)
 	/* scalar step */
 	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->d0, impl->d_source);
 
+	// diffuse
+	diffuse(impl->d0, impl->d, DIFFUSION, Boundary::D);
+
+	// transport
 	advect(impl->d, impl->d0, impl->u, impl->v, 0.995, Boundary::D);
 
 	/* end scalar step */
