@@ -12,6 +12,7 @@ static const unsigned NFRAME = 240;
 static const int SIZE = W *H;
 static const int THREADS_PER_BLOCK = 256;
 static const int NUMBER_OF_BLOCKS = SIZE / THREADS_PER_BLOCK;
+static const int NUMBER_OF_ITERATIONS = 50;
 
 enum class Boundary {
 	U, 
@@ -150,21 +151,21 @@ __global__ void init_source(float *u, float *v, float *d)
 	int distance = dx * dx + dy * dy;
 
 	// if (distance <= 2500) {
-	// 	u[idx] = 50.0 * (dy - dx);
-	// 	v[idx] = 50.0 * (dx + dy);
+	// 	u[idx] = 10.0 * (dy - dx);
+	// 	v[idx] = 10.0 * (dx + dy);
 	// }
 
-	u[idx] = 5000.0;
+	u[idx] = 50.0;
 
 	dx = x - W / 2 + 100, dy = -(y - H / 2);
 	distance = dx * dx + dy * dy;
 
-	if (distance <= 900)  d[idx] = 5.0;
+	if (distance <= 900)  d[idx] = 100.0;
 
 	dx = x - W / 2 - 100, dy = -(y - H / 2);
 	distance = dx * dx + dy * dy;
 
-	if (distance <= 900)  d[idx] = 5.0;
+	if (distance <= 900)  d[idx] = 100.0;
 }
 
 __global__ void compute_curl(const float *u, const float *v, float *curl)
@@ -198,7 +199,7 @@ __global__ void vc_update(float *u0, float *v0, const float *curl, const float *
 	}
 }
 
-__host__ void project(float *u, float *v, float *p, float *p0, float *ptemp, float *div)
+__host__ void project(float *u, float *v, float *p, float *p0, float *div)
 {
 	get_divergence <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, div);
 	cudaMemset(p, 0, SIZE * sizeof(float));
@@ -206,11 +207,11 @@ __host__ void project(float *u, float *v, float *p, float *p0, float *ptemp, flo
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (div, Boundary::D);
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (p, Boundary::D);
 
-	for (int i = 0; i < 50; i++) {
+	for (int i = 0; i < NUMBER_OF_ITERATIONS; i++) {
 		linear_solve <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, div, p0, p);
-
-		SWAP(p, p0);
 		
+		SWAP(p, p0);
+
 		set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (p, Boundary::D);
 	}
 
@@ -225,18 +226,20 @@ __host__ void advect(float *d, const float *d0, const float *u, const float *v, 
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (d, mode);
 }
 
-__host__ void vorticity_confine(float *u0, float *v0, float *curl, const float *u, const float *v)
+__host__ void vorticity_confine(float *u, float *v, float *curl, const float *u0, const float *v0)
 {
-	compute_curl <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, curl);
-	vc_update <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u0, v0, curl, u, v);
+	compute_curl <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u0, v0, curl);
+	vc_update <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, curl, u0, v0);
+	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, Boundary::U);
+	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (v, Boundary::V);
 }
 
 struct Lab1VideoGenerator::Impl {
 	int t = 0;
 	float *u, *v, *p;
 	float *u0, *v0, *p0;
-	float *ptemp;
 	float *u_source, *v_source;
+	float *u_temp, *v_temp;
 
 	float *div;
 	float *curl;
@@ -263,6 +266,9 @@ Lab1VideoGenerator::Lab1VideoGenerator(): impl(new Impl) {
 	cudaMalloc(&(impl->div), SIZE * sizeof(float));
 	cudaMalloc(&(impl->curl), SIZE * sizeof(float));
 
+	cudaMalloc(&(impl->u_temp), SIZE * sizeof(float));
+	cudaMalloc(&(impl->v_temp), SIZE * sizeof(float));
+
 	cudaMemset(impl->u0, 0, SIZE * sizeof(float));
 	cudaMemset(impl->v0, 0, SIZE * sizeof(float));
 	cudaMemset(impl->d0, 0, SIZE * sizeof(float));
@@ -275,8 +281,8 @@ Lab1VideoGenerator::Lab1VideoGenerator(): impl(new Impl) {
 }
 
 Lab1VideoGenerator::~Lab1VideoGenerator() {
-	cudaFree(impl->u), cudaFree(impl->u0), cudaFree(impl->u_source);
-	cudaFree(impl->v), cudaFree(impl->v0), cudaFree(impl->v_source);
+	cudaFree(impl->u), cudaFree(impl->u0), cudaFree(impl->u_source), cudaFree(impl->u_temp);
+	cudaFree(impl->v), cudaFree(impl->v0), cudaFree(impl->v_source), cudaFree(impl->v_temp);
 	cudaFree(impl->p), cudaFree(impl->p0);
 	cudaFree(impl->d), cudaFree(impl->d0), cudaFree(impl->d_source);
 
@@ -304,18 +310,20 @@ void Lab1VideoGenerator::Generate(uint8_t *yuv)
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, Boundary::V);
 
 	// vorticity confinement
-	vorticity_confine(impl->u_source, impl->v_source, impl->curl, impl->u, impl->v);
-	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, impl->u_source);
-	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, impl->v_source);
+	vorticity_confine(impl->u_temp, impl->v_temp, impl->curl, impl->u0, impl->v0);
+	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, impl->u_temp);
+	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, impl->v_temp);
 
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, Boundary::U);
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, Boundary::V);
+
+	project(impl->u0, impl->v0, impl->p, impl->p0, impl->div);
 
 	// transport
 	advect(impl->u, impl->u0, impl->u0, impl->v0, 1.0, Boundary::U);
 	advect(impl->v, impl->v0, impl->u0, impl->v0, 1.0, Boundary::V);
 
-	project(impl->u, impl->v, impl->p, impl->p0, impl->ptemp, impl->div);
+	project(impl->u, impl->v, impl->p, impl->p0, impl->div);
 
 	/* end velocity step */
 
@@ -325,6 +333,10 @@ void Lab1VideoGenerator::Generate(uint8_t *yuv)
 	advect(impl->d, impl->d0, impl->u, impl->v, 0.995, Boundary::D);
 
 	/* end scalar step */
+
+	cudaMemcpy(impl->u0, impl->u, SIZE * sizeof(float), cudaMemcpyDeviceToDevice);
+	cudaMemcpy(impl->v0, impl->v, SIZE * sizeof(float), cudaMemcpyDeviceToDevice);
+	cudaMemcpy(impl->d0, impl->d, SIZE * sizeof(float), cudaMemcpyDeviceToDevice);
 
 	// copy to frame
 	float *m = new float[SIZE];
@@ -347,10 +359,6 @@ void Lab1VideoGenerator::Generate(uint8_t *yuv)
 
 	delete [] m;
 	delete [] n;
-
-	SWAP(impl->u, impl->u0);
-	SWAP(impl->v, impl->v0);
-	SWAP(impl->d, impl->d0);
 
 	++(impl->t);
 }
