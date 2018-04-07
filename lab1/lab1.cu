@@ -3,7 +3,7 @@
 #include <algorithm>
 #include "lab1.h"
 
-#define dt 0.5f
+#define dt 0.05f
 #define RGB2Y(r, g, b) ( +0.299 * (r) + 0.587 * (g) + 0.114 * (b) )
 #define RGB2U(r, g, b) ( -0.169 * (r) - 0.331 * (g) + 0.500 * (b) + 128.0 )
 #define RGB2V(r, g, b) ( +0.500 * (r) - 0.419 * (g) - 0.081 * (b) + 128.0 )
@@ -38,12 +38,12 @@ __device__ inline float bilinear_interpolate(float x, float y, const float *s)
 	int px0, px1, py0, py1;
 	float dx0, dx1, dy0, dy1;
 
-	px0 = __float2int_rd(x), py0 = __float2int_rd(y);
+	px0 = static_cast<int>(x), py0 = static_cast<int>(y);
 	px1 = px0 + 1, py1 = py0 + 1;
 	dx1 = x - px0, dy1 = y - py0;
 	dx0 = 1.0 - dx1; dy0 = 1.0 - dy1;
 
-	return dx0 * (dy1 * s[px0 + W * py0] + dy1 * s[px0 + W * py1]) +
+	return dx0 * (dy0 * s[px0 + W * py0] + dy1 * s[px0 + W * py1]) +
 			dx1 * (dy0 * s[px1 + W * py0] + dy1 * s[px1 + W * py1]);
 }
 
@@ -231,7 +231,7 @@ __host__ void project(float *u, float *v, float *p, float *p0, float *div)
 	for (int i = 0; i < NUMBER_OF_ITERATIONS; i++) {
 		linear_solve <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, div, p0, p);
 		
-		// set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (p, Boundary::D);
+		set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (p, Boundary::D);
 
 		cudaMemcpy(p0, p, SIZE * sizeof(float), cudaMemcpyDeviceToDevice);
 	}
