@@ -110,7 +110,7 @@ __global__ void get_divergence(const float *u, const float *v, float *div)
 	}
 }
 
-__global__ void linear_solve(const float *u, const float *v, const float *div, const float *p0, float *p)
+__global__ void linear_solve(const float *div, const float *p0, float *p)
 {
 	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
 	const int x = idx % W, y = idx / W;
@@ -229,7 +229,7 @@ __host__ void project(float *u, float *v, float *p, float *p0, float *div)
 	cudaMemset(p0, 0, SIZE * sizeof(float));
 
 	for (int i = 0; i < NUMBER_OF_ITERATIONS; i++) {
-		linear_solve <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, div, p0, p);
+		linear_solve <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (div, p0, p);
 		
 		set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (p, Boundary::D);
 
