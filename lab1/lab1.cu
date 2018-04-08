@@ -95,16 +95,6 @@ __global__ void rgb_to_yuv(const T *rgb, uint8_t *yuv)
 	}
 }
 
-__global__ void add_force(float *d, const float *s)
-{
-	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
-	const int x = idx % W, y = idx / W;
-
-	if (not_boundary(x, y)) {
-		d[idx] += dt * s[idx];
-	}
-}
-
 __global__ void transport(float *d, const float *d0, const float *u, const float *v, const float dissipation)
 {
 	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
@@ -274,6 +264,17 @@ __host__ void compute_buoyancy(const float *d, float *v)
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (v, Boundary::V);
 }
 
+__host__ void add_source(float *d, const float *s, Boundary mode)
+{
+	auto f = [=] __device__ (float a, float b) {
+		return a + dt * b;
+	};
+
+	thrust::transform(thrust::device, d, d + SIZE, s, d, f);
+
+	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (d, mode);
+}
+
 __host__ void project(float *u, float *v, float *p, float *p0, float *div)
 {
 	get_divergence <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, div);
@@ -399,25 +400,17 @@ void Lab1VideoGenerator::get_info(Lab1VideoInfo &info)
 void Lab1VideoGenerator::Generate(uint8_t *yuv) 
 {
 	/* velocity step */
-	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, impl->u_source);
-	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, impl->v_source);
-
-	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, Boundary::U);
-	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, Boundary::V);
+	add_source(impl->u0, impl->u_source, Boundary::U);
+	add_source(impl->v0, impl->v_source, Boundary::V);
 
 	// add buoyancy
 	compute_buoyancy(impl->d0, impl->v_temp);
-	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, impl->v_temp);
-
-	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, Boundary::V);
+	add_source(impl->v0, impl->v_temp, Boundary::V);
 
 	// vorticity confinement
 	vorticity_confine(impl->u_temp, impl->v_temp, impl->curl, impl->u0, impl->v0);
-	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, impl->u_temp);
-	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, impl->v_temp);
-
-	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, Boundary::U);
-	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, Boundary::V);
+	add_source(impl->u0, impl->u_temp, Boundary::U);
+	add_source(impl->v0, impl->v_temp, Boundary::V);
 
 	// diffuse
 	diffuse(impl->u0, impl->u, DIFFUSION, Boundary::U);
@@ -434,7 +427,7 @@ void Lab1VideoGenerator::Generate(uint8_t *yuv)
 	/* end velocity step */
 
 	/* scalar step */
-	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->d0, impl->d_source);
+	add_source(impl->d0, impl->d_source, Boundary::D);
 
 	// diffuse
 	diffuse(impl->d0, impl->d, DIFFUSION, Boundary::D);
