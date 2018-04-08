@@ -117,7 +117,7 @@ __global__ void transport(float *d, const float *d0, const float *u, const float
 	}
 }
 
-__global__ void get_divergence(const float *u, const float *v, float *div)
+__global__ void compute_divergence(const float *u, const float *v, float *div)
 {
 	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
 	const int x = idx % W, y = idx / W;
@@ -277,7 +277,7 @@ __host__ void add_source(float *d, const float *s, Boundary mode)
 
 __host__ void project(float *u, float *v, float *p, float *p0, float *div)
 {
-	get_divergence <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, div);
+	compute_divergence <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, div);
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (div, Boundary::D);
 
 	cudaMemset(p, 0, SIZE * sizeof(float));
