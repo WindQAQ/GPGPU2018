@@ -13,10 +13,10 @@
 #define RGB2U(r, g, b) ( -0.169 * (r) - 0.331 * (g) + 0.500 * (b) + 128.0 )
 #define RGB2V(r, g, b) ( +0.500 * (r) - 0.419 * (g) - 0.081 * (b) + 128.0 )
 
-static const std::string BACKGROUND_FILE_NAME = "./aladdin_lamp.bmp";
-static const unsigned W = 512;
-static const unsigned H = 512;
-static const unsigned NFRAME = 240;
+static const std::string BACKGROUND_FILE_NAME = "./background.bmp";
+static const unsigned W = 1024;
+static const unsigned H = 1024;
+static const unsigned NFRAME = 360;
 static const int SIZE = W * H;
 static const int THREADS_PER_BLOCK = 256;
 static const int NUMBER_OF_BLOCKS = SIZE / THREADS_PER_BLOCK;
@@ -59,11 +59,11 @@ __global__ void density_to_yuv(const float *d, uint8_t *yuv)
 	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
 	const int x = idx % W, y = idx / W;
 
-	const float r = clamp(255.0f - d[idx], 0.0f, 255.0f),
-				g = 250.0f,
-				b = 255.0f;
+	const float r = clamp(4.0 * d[idx], 0.0f, 255.0f),
+				g = clamp(4.0 * d[idx], 0.0f, 255.0f),
+				b = clamp(4.0 * d[idx], 0.0f, 255.0f);
 
-	if (fabsf(d[idx]) <= 1e-6) return;
+	if (fabsf(4.0 * d[idx]) <= 20.0) return;
 
 	yuv[idx] = static_cast<uint8_t>(RGB2Y(r, g, b));
 
@@ -192,7 +192,7 @@ __global__ void set_boundary(float *p, Boundary mode)
 	}
 }
 
-__global__ void init_source(float *u, float *v, float *d)
+__global__ void init_source(float *u, float *v, float *d, const int t)
 {
 	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
 	const int x = idx % W, y = idx / W;
@@ -200,22 +200,34 @@ __global__ void init_source(float *u, float *v, float *d)
 	int dx = x - W / 2, dy = -(y - H / 2);
 	int distance = dx * dx + dy * dy;
 
-	if (distance <= 2500) {
-		u[idx] = 10.0 * (dy - dx);
-		v[idx] = 10.0 * (-dx - dy);
+	{
+		dx = 280 - x, dy = 678 - y;
+		distance = dx * dx + dy * dy;
+
+		if (distance <= 25) d[idx] = 150.0;
+
+		if (distance <= 400 && dy < 0) {
+			u[idx] = 20.0 * (dx - (t % 10) + 5);
+			v[idx] = 10.0 * sinf(dy);
+		}
 	}
 
-	// u[idx] = 50.0;
+	{
+		dx = 570 - x, dy = 520 - y;
+		distance = dx * dx + dy * dy;
 
-	dx = x - W / 2 + 100, dy = -(y - H / 2);
-	distance = dx * dx + dy * dy;
+		if (distance <= 25) d[idx] = 500.0;
 
-	if (distance <= 900)  d[idx] = 100.0;
-
-	dx = x - W / 2 - 100, dy = -(y - H / 2);
-	distance = dx * dx + dy * dy;
-
-	if (distance <= 900)  d[idx] = 100.0;
+		if (distance <= 400) {
+			if (dx < 0 && dy < 0) {
+				u[idx] = 20.0 * (2 * dx - dy);
+				v[idx] = 10.0 * (0.5 - (sinf(dy)));
+			}
+			else {
+				u[idx] = v[idx] = -15.0;
+			}
+		}
+	}
 }
 
 __global__ void compute_curl(const float *u, const float *v, float *curl)
@@ -373,8 +385,6 @@ Lab1VideoGenerator::Lab1VideoGenerator(): impl(new Impl) {
 	cudaMemset(impl->u_source, 0, SIZE * sizeof(float));
 	cudaMemset(impl->v_source, 0, SIZE * sizeof(float));
 	cudaMemset(impl->d_source, 0, SIZE * sizeof(float));
-
-	init_source <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u_source, impl->v_source, impl->d_source);
 }
 
 Lab1VideoGenerator::~Lab1VideoGenerator() {
@@ -399,6 +409,9 @@ void Lab1VideoGenerator::get_info(Lab1VideoInfo &info)
 
 void Lab1VideoGenerator::Generate(uint8_t *yuv) 
 {
+	// init source
+	init_source <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u_source, impl->v_source, impl->d_source, impl->t);
+
 	/* velocity step */
 	add_source(impl->u0, impl->u_source, Boundary::U);
 	add_source(impl->v0, impl->v_source, Boundary::V);
