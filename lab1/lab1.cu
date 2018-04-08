@@ -1,6 +1,10 @@
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
+
+#include <thrust/reduce.h>
+#include <thrust/execution_policy.h>
+
 #include "lab1.h"
 #include "utility.hpp"
 
@@ -13,7 +17,7 @@ static const std::string BACKGROUND_FILE_NAME = "./aladdin_lamp.bmp";
 static const unsigned W = 512;
 static const unsigned H = 512;
 static const unsigned NFRAME = 240;
-static const int SIZE = W *H;
+static const int SIZE = W * H;
 static const int THREADS_PER_BLOCK = 256;
 static const int NUMBER_OF_BLOCKS = SIZE / THREADS_PER_BLOCK;
 static const int NUMBER_OF_ITERATIONS = 50;
@@ -255,6 +259,21 @@ __global__ void vc_update(float *u0, float *v0, const float *curl, const float *
 	}
 }
 
+__host__ void compute_buoyancy(const float *d, float *v)
+{
+	float s = thrust::reduce(thrust::device, d, d + SIZE, 0.0f);
+
+	s /= SIZE;
+
+	auto f = [=] __device__ (float x) {
+		return -100.0 * (0.000625 * x + 0.025 * (x - s));
+	};
+
+	thrust::transform(thrust::device, d, d + SIZE, v, f);
+
+	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (v, Boundary::V);
+}
+
 __host__ void project(float *u, float *v, float *p, float *p0, float *div)
 {
 	get_divergence <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (u, v, div);
@@ -384,6 +403,12 @@ void Lab1VideoGenerator::Generate(uint8_t *yuv)
 	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, impl->v_source);
 
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->u0, Boundary::U);
+	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, Boundary::V);
+
+	// add buoyancy
+	compute_buoyancy(impl->d0, impl->v_temp);
+	add_force <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, impl->v_temp);
+
 	set_boundary <<<NUMBER_OF_BLOCKS, THREADS_PER_BLOCK>>> (impl->v0, Boundary::V);
 
 	// vorticity confinement
