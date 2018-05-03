@@ -41,13 +41,13 @@ namespace Naive {
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
         if (idx < text_size) {
-            if (idx == 0 || (text[idx - 1] == '\n' && text[idx] != '\n')) {
+            if (text[idx] == '\n') {
+                pos[idx] = 0;
+            }
+            else if (idx == 0 || (text[idx - 1] == '\n' && text[idx] != '\n')) {
                 for (int i = idx, k = 1; i < text_size && text[i] != '\n'; i++, k++) {
                     pos[i] = k;
                 }
-            }
-            else if (text[idx] == '\n') {
-                pos[idx] = 0;
             }
         }
     }
