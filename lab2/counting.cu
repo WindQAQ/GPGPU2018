@@ -7,7 +7,6 @@
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 
-const int MAX_SIZE = (40 << 20) + 100;
 const int NUM_THREADS = 128;
 
 __device__ __host__ int CeilDiv(int a, int b) { return (a-1)/b + 1; }
@@ -55,5 +54,5 @@ namespace Naive {
 
 void CountPosition2(const char *text, int *pos, int text_size)
 {
-    Naive::count <<<MAX_SIZE / NUM_THREADS + 10, NUM_THREADS>>> (text, pos, text_size);
+    Naive::count <<<CeilDiv(text_size, NUM_THREADS), NUM_THREADS>>> (text, pos, text_size);
 }
