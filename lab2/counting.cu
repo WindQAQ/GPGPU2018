@@ -5,6 +5,7 @@
 #include <thrust/transform.h>
 #include <thrust/functional.h>
 #include <thrust/device_ptr.h>
+#include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
 
 const int NUM_THREADS = 128;
