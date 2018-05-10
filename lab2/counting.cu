@@ -33,7 +33,7 @@ namespace Naive {
             if (text[idx] == '\n') {
                 pos[idx] = 0;
             }
-            else if (idx == 0 || (text[idx - 1] == '\n' && text[idx] != '\n')) {
+            else if (idx == 0 || text[idx - 1] == '\n') {
                 for (int i = idx, k = 1; i < text_size && text[i] != '\n'; i++, k++) {
                     pos[i] = k;
                 }
