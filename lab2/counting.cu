@@ -19,8 +19,12 @@ struct F: public thrust::unary_function<char, int> {
 void CountPosition1(const char *text, int *pos, int text_size)
 {
     F f;
-    thrust::transform(thrust::device, text, text + text_size, pos, f);
-    thrust::inclusive_scan_by_key(thrust::device, pos, pos + text_size, pos, pos);
+    int *keys;
+    cudaMalloc((void **)&keys, text_size * sizeof(int));
+    thrust::transform(thrust::device, text, text + text_size, keys, f);
+    cudaMemcpy(pos, keys, text_size * sizeof(int), cudaMemcpyDeviceToDevice);
+    thrust::inclusive_scan_by_key(thrust::device, keys, keys + text_size, pos, pos);
+    cudaFree(keys);
 }
 
 namespace Naive {
