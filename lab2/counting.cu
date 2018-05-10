@@ -7,7 +7,7 @@
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 
-const int NUM_THREADS = 128;
+const int NUM_THREADS = 256;
 
 __device__ __host__ int CeilDiv(int a, int b) { return (a-1)/b + 1; }
 __device__ __host__ int CeilAlign(int a, int b) { return CeilDiv(a, b) * b; }
