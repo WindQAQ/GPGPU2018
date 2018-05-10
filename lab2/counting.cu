@@ -5,7 +5,6 @@
 #include <thrust/transform.h>
 #include <thrust/functional.h>
 #include <thrust/device_ptr.h>
-#include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
 
 const int NUM_THREADS = 128;
@@ -16,16 +15,6 @@ __device__ __host__ int CeilAlign(int a, int b) { return CeilDiv(a, b) * b; }
 struct F: public thrust::unary_function<char, int> {
     __device__ __host__ int operator() (char a) { return (a == '\n')? 0: 1; }
 };
-
-template <typename T>
-void print(T* a, const int size)
-{
-    thrust::device_ptr<T> p(a);
-    thrust::device_vector<T> v(p, p + size);
-
-    thrust::copy(v.begin(), v.end(), std::ostream_iterator<int>(std::cout, " "));
-    std::cout << std::endl;
-}
 
 void CountPosition1(const char *text, int *pos, int text_size)
 {
