@@ -3,6 +3,7 @@
 #include <string>
 
 const std::string mode = "hierarchical";
+const int max_iterations = 10000;
 
 __constant__ int dir[][2] = {
 	{0, -1},
@@ -140,7 +141,8 @@ namespace baseline {
 		const float *mask,
 		float *output,
 		const int wb, const int hb, const int wt, const int ht,
-		const int oy, const int ox
+		const int oy, const int ox,
+		const int iterations = 10000
 	)
 	{
 		float *fixed, *buf1, *buf2;
@@ -157,7 +159,7 @@ namespace baseline {
 		cudaMemcpy(buf1, target, 3 * wt * ht * sizeof(float), cudaMemcpyDeviceToDevice);
 
 		// iterate
-		for (int i = 0; i < 10000; ++i) {
+		for (int i = 0; i < iterations; ++i) {
 			PoissonImageCloningIteration <<<gdim, bdim>>> (
 				fixed, mask, buf1, buf2, wt, ht
 			);
@@ -222,7 +224,8 @@ namespace sor {
 		const float *mask,
 		float *output,
 		const int wb, const int hb, const int wt, const int ht,
-		const int oy, const int ox
+		const int oy, const int ox,
+		const int iterations = 10000
 	)
 	{
 		float *fixed, *buf1, *buf2;
@@ -240,7 +243,7 @@ namespace sor {
 		cudaMemcpy(buf2, target, 3 * wt * ht * sizeof(float), cudaMemcpyDeviceToDevice);
 
 		// iterate
-		for (int i = 0; i < 10000; ++i) {
+		for (int i = 0; i < iterations; ++i) {
 			PoissonImageCloningIteration <<<gdim, bdim>>> (
 				fixed, mask, buf1, buf2, wt, ht, 1.9
 			);
@@ -371,7 +374,8 @@ namespace hierarchical {
 		const float *mask,
 		float *output,
 		const int wb, const int hb, const int wt, const int ht,
-		const int oy, const int ox
+		const int oy, const int ox,
+		const int level = 4, const int iterations = 10000
 	)
 	{
 		float *fixed, *buf1, *buf2;
@@ -384,12 +388,12 @@ namespace hierarchical {
 		cudaMemcpy(buf1, target, 3 * wt * ht * sizeof(float), cudaMemcpyDeviceToDevice);
 
 		// iterate
-		for (int scale = 8; scale >= 1; scale >>= 1) {
+		for (int scale = (1 << (level - 1)); scale >= 1; scale >>= 1) {
 			CalculateFixed <<<gdim, bdim>>> (
 				background, target, mask, fixed,
 				wb, hb, wt, ht, oy, ox, scale
 			);
-			for (int i = 0; i < 100 * scale; ++i) {
+			for (int i = 0; i < iterations / level; ++i) {
 				PoissonImageCloningIteration <<<gdim, bdim>>> (
 					fixed, mask, buf1, buf2, wt, ht, scale
 				);
@@ -423,7 +427,7 @@ void PoissonImageCloning (
 )
 {
 	if (mode == "simple") {
-		cudaMemcpy(output, background, wb*hb*sizeof(float)*3, cudaMemcpyDeviceToDevice);
+		cudaMemcpy(output, background, 3 * wb * hb * sizeof(float), cudaMemcpyDeviceToDevice);
 		SimpleClone<<<dim3(CeilDiv(wt,32), CeilDiv(ht,16)), dim3(32,16)>>>(
 			background, target, mask, output,
 			wb, hb, wt, ht, oy, ox
@@ -432,19 +436,19 @@ void PoissonImageCloning (
 	else if (mode == "baseline") {
 		baseline::PoissonImageCloning(
 			background, target, mask, output,
-			wb, hb, wt, ht, oy, ox
+			wb, hb, wt, ht, oy, ox, max_iterations
 		);
 	}
 	else if (mode == "sor") {
 		sor::PoissonImageCloning(
 			background, target, mask, output,
-			wb, hb, wt, ht, oy, ox
+			wb, hb, wt, ht, oy, ox, max_iterations
 		);
 	}
 	else if (mode == "hierarchical") {
 		hierarchical::PoissonImageCloning(
 			background, target, mask, output,
-			wb, hb, wt, ht, oy, ox
+			wb, hb, wt, ht, oy, ox, 4, max_iterations
 		);
 	}
 }
