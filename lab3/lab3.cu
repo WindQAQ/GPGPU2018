@@ -334,7 +334,7 @@ void PoissonImageCloning (
 	else if (mode == "hierarchical") {
 		hierarchical::PoissonImageCloning(
 			background, target, mask, output,
-			wb, hb, wt, ht, oy, ox, 4, max_iterations
+			wb, hb, wt, ht, oy, ox, 6, max_iterations
 		);
 	}
 }
