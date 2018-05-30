@@ -255,6 +255,19 @@ namespace sor {
 		}
 	}
 
+	__global__ void PlaceCorrectValue(float *output, const float *input, const int wt, const int ht)
+	{
+		const int yt = blockIdx.y * blockDim.y + threadIdx.y;
+		const int xt = blockIdx.x * blockDim.x + threadIdx.x;
+		const int center_idx = to_1dindex(wt, xt, yt);
+
+		if (in_boundary(wt, ht, xt, yt) && (xt + yt) & 1) {
+			output[3 * center_idx + 0] = input[3 * center_idx + 0];
+			output[3 * center_idx + 1] = input[3 * center_idx + 1];
+			output[3 * center_idx + 2] = input[3 * center_idx + 2];
+		}
+	}
+
 	void PoissonImageCloning(
 		const float *background,
 		const float *target,
@@ -288,6 +301,9 @@ namespace sor {
 				fixed, mask, buf2, buf1, wt, ht, 1.9
 			);
 		}
+
+		// get odd-indexed grid of buf2 back to buf1
+		PlaceCorrectValue <<<gdim, bdim>>> (buf1, buf2, wt, ht);
 
 		// copy the image back
 		cudaMemcpy(output, background, 3 * wb * hb * sizeof(float), cudaMemcpyDeviceToDevice);
